@@ -2,6 +2,8 @@
 
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { askGroq } from '@/lib/llm/groq'
+import { extractAndSaveMemories } from '@/lib/llm/memory'
+import { buildUserContext } from '@/lib/llm/context'
 
 export async function POST(req: Request) {
   try {
@@ -28,9 +30,9 @@ export async function POST(req: Request) {
       return Response.json({ error: 'message e chatId são obrigatórios' }, { status: 400 })
     }
 
-    const service = await createServiceClient()
+    const service = createServiceClient()
 
-    // 2. Salvar mensagem do usuário no banco
+    // 2. Salvar mensagem do usuário
     const { error: insertUserError } = await service.from('messages').insert({
       chat_id: chatId,
       role: 'user',
@@ -44,49 +46,57 @@ export async function POST(req: Request) {
 
     console.log('[ROUTE /api/chat] Mensagem do usuário salva com sucesso.')
 
-    // 3. Buscar histórico ANTERIOR à mensagem atual (exclui a recém-inserida para evitar duplicata)
-    const { data: history, error: historyError } = await service
-      .from('messages')
-      .select('role, content')
-      .eq('chat_id', chatId)
-      .order('created_at', { ascending: true })
-      .limit(20)
+    // 3. Buscar histórico + memórias em paralelo
+    const [historyResult, memoryContext] = await Promise.all([
+      service
+        .from('messages')
+        .select('role, content')
+        .eq('chat_id', chatId)
+        .order('created_at', { ascending: true })
+        .limit(20),
+      buildUserContext(user.id, message),
+    ])
 
-    if (historyError) {
-      console.error('[ROUTE /api/chat] Erro ao buscar histórico:', historyError.message)
+    if (historyResult.error) {
+      console.error('[ROUTE /api/chat] Erro ao buscar histórico:', historyResult.error.message)
       return Response.json({ error: 'Erro ao buscar histórico do chat.' }, { status: 500 })
     }
 
-    // 4. Montar array para o Groq:
-    //    histórico do banco (pode ou não incluir a msg atual, dependendo da latência)
-    //    + mensagem atual garantida no final
-    //
-    //    Para evitar duplicata caso o SELECT já tenha retornado a msg recém-inserida,
-    //    removemos a última entrada se ela for idêntica à mensagem atual.
-    const historyMessages = (history || []).map((m) => ({
+    // 4. Montar array de mensagens com deduplicação
+    const historyMessages = (historyResult.data || []).map((m) => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
     }))
 
     const lastMsg = historyMessages[historyMessages.length - 1]
-    const alreadyIncluded =
-      lastMsg?.role === 'user' && lastMsg?.content === message
+    const alreadyIncluded = lastMsg?.role === 'user' && lastMsg?.content === message
 
-    const messagesForLLM = alreadyIncluded
+    const conversationMessages = alreadyIncluded
       ? historyMessages
       : [...historyMessages, { role: 'user' as const, content: message }]
 
+    // 5. Injetar memórias no contexto
+    //    Se houver memórias: inserir como mensagem de sistema adicional
+    //    logo antes do histórico, para não misturar com a identidade da VERA
+    //    O system prompt da VERA já está em askGroq() — aqui só adicionamos
+    //    o bloco de memória como contexto extra.
+    const messagesForLLM = memoryContext
+      ? [
+          { role: 'system' as const, content: memoryContext },
+          ...conversationMessages,
+        ]
+      : conversationMessages
+
     console.log(
-      `[ROUTE /api/chat] Enviando ${messagesForLLM.length} mensagem(ns) ao Groq.`,
-      `(histórico: ${historyMessages.length}, deduplicado: ${alreadyIncluded})`
+      `[ROUTE /api/chat] Enviando ao Groq — mensagens: ${conversationMessages.length}, memórias injetadas: ${memoryContext ? 'sim' : 'não'}`
     )
 
-    // 5. Enviar ao Groq com a mensagem atual garantida
+    // 6. Chamar o LLM
     const reply = await askGroq(messagesForLLM)
 
     console.log('[ROUTE /api/chat] Resposta recebida do Groq:', reply.slice(0, 80) + '...')
 
-    // 6. Salvar resposta da IA no banco
+    // 7. Salvar resposta da IA
     const { error: insertAssistantError } = await service.from('messages').insert({
       chat_id: chatId,
       role: 'assistant',
@@ -95,12 +105,16 @@ export async function POST(req: Request) {
 
     if (insertAssistantError) {
       console.error('[ROUTE /api/chat] Erro ao salvar resposta da IA:', insertAssistantError.message)
-      // Não aborta — o usuário já recebeu a resposta; log é suficiente
     } else {
       console.log('[ROUTE /api/chat] Resposta da IA salva com sucesso.')
     }
 
-    // 7. Atualizar título do chat na primeira troca
+    // 8. Extração de memória em background — nunca bloqueia o retorno
+    extractAndSaveMemories(user.id, message, reply).catch((err) => {
+      console.error('[ROUTE /api/chat] Erro na pipeline de memória:', err)
+    })
+
+    // 9. Atualizar título do chat na primeira troca
     const { count } = await service
       .from('messages')
       .select('*', { count: 'exact', head: true })
