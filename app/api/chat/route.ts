@@ -48,14 +48,14 @@ export async function POST(req: Request) {
 
     // 3. Buscar histórico + memórias em paralelo
     const [historyResult, memoryContext] = await Promise.all([
-      service
-        .from('messages')
-        .select('role, content')
-        .eq('chat_id', chatId)
-        .order('created_at', { ascending: true })
-        .limit(20),
-      buildUserContext(user.id, message),
-    ])
+  service
+    .from('messages')
+    .select('role, content')
+    .eq('chat_id', chatId)
+    .order('created_at', { ascending: true })
+    .limit(20),
+  buildUserContext(user.id, chatId, message),   // ← chatId adicionado
+])
 
     if (historyResult.error) {
       console.error('[ROUTE /api/chat] Erro ao buscar histórico:', historyResult.error.message)
@@ -110,9 +110,9 @@ export async function POST(req: Request) {
     }
 
     // 8. Extração de memória em background — nunca bloqueia o retorno
-    extractAndSaveMemories(user.id, message, reply).catch((err) => {
-      console.error('[ROUTE /api/chat] Erro na pipeline de memória:', err)
-    })
+    extractAndSaveMemories(user.id, chatId, message, reply).catch((err) => {
+  console.error('[ROUTE /api/chat] Erro na pipeline de memória:', err)
+  })
 
     // 9. Atualizar título do chat na primeira troca
     const { count } = await service

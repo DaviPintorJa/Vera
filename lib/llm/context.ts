@@ -1,183 +1,169 @@
 // lib/llm/context.ts
 import { createServiceClient } from '@/lib/supabase/server'
 
-type MemoryType = 'identity' | 'location' | 'goal' | 'preference' | 'context'
-
 interface MemoryRow {
-  type: MemoryType
+  type: string
   value: string
-  granularity: string
+  scope: string
+  importance: number
   confidence: number
+  source: string
 }
 
-// ─── Mapeamento expandido e mais inteligente ────────────────────────────────
-const TYPE_KEYWORDS: Record<MemoryType, string[]> = {
-  identity: [
-    'quem sou', 'meu nome', 'minha idade', 'quantos anos', 'me chamo', 'sou eu',
-    'minha identidade', 'me apresente', 'quem é o usuário', 'eu sou', 'meu perfil',
-    'sobre mim', 'minha história', 'nascido em', 'data de nascimento',
-  ],
-  location: [
-    'onde moro', 'minha cidade', 'meu país', 'meu estado', 'onde fico', 'clima',
-    'temperatura', 'onde estou', 'localização', 'onde vivo', 'meu endereço',
-    'moro em', 'estou em', 'cidade atual', 'país atual',
-  ],
-  goal: [
-    'meu objetivo', 'quero aprender', 'minha meta', 'meu plano', 'o que quero',
-    'minha ambição', 'estou tentando', 'pretendo', 'quero alcançar', 'sonho',
-    'aspiracao', 'próximo passo', 'futuro',
-  ],
-  preference: [
-    'meu gosto', 'prefiro', 'gosto de', 'não gosto', 'favorito', 'preferência',
-    'curto', 'detesto', 'amo', 'odeio', 'prefiro evitar', 'me incomoda',
-    'adoro', 'não suporto', 'melhor para mim',
-  ],
-  context: [
-    'minha profissão', 'meu trabalho', 'minha família', 'minha situação',
-    'meu contexto', 'trabalho com', 'trabalho em', 'sou profissional',
-    'estudo', 'faculdade', 'carreira', 'rotina', 'dia a dia',
-  ],
+interface TaskRow {
+  title: string
+  description: string | null
+  status: string
+  importance: number
 }
 
-// Palavras que indicam "pergunta sobre mim" mesmo sem tipo específico
-const GENERAL_INDICATORS = [
-  'eu', 'meu', 'minha', 'mim', 'sobre mim', 'fale de mim', 'me conte',
-  'lembra', 'sabe que eu', 'você sabe',
-]
+// ─── Recuperação em camadas ───────────────────────────────────────────────────
 
-const TYPE_LABELS: Record<MemoryType, string> = {
-  identity: 'Identidade',
-  location: 'Localização',
-  goal: 'Objetivo',
-  preference: 'Preferência',
-  context: 'Contexto',
-}
-
-// ─── Detecção aprimorada (keyword + score) ───────────────────────────────────
-function detectMemoryType(message: string): MemoryType | null {
-  const lower = message.toLowerCase().trim()
-
-  // Verifica se é uma pergunta sobre o usuário
-  const isAboutUser = GENERAL_INDICATORS.some(ind => lower.includes(ind))
-
-  let bestType: MemoryType | null = null
-  let bestScore = 0
-
-  for (const [type, keywords] of Object.entries(TYPE_KEYWORDS) as [MemoryType, string[]][]) {
-    const matches = keywords.filter(kw => lower.includes(kw)).length
-    const score = matches * (type === 'identity' || type === 'preference' ? 1.3 : 1) // leve bias para tipos mais pessoais
-
-    if (score > bestScore) {
-      bestScore = score
-      bestType = type
-    }
-  }
-
-  // Se encontrou algo razoável ou é claramente sobre o usuário → retorna
-  if (bestScore >= 1 || (isAboutUser && bestScore > 0)) {
-    return bestType
-  }
-
-  return null
-}
-
-// ─── Busca de memórias (melhor balanceamento) ───────────────────────────────
-async function fetchMemories(
+async function fetchProjectMemories(
+  service: ReturnType<typeof createServiceClient>,
   userId: string,
-  priorityType: MemoryType | null
+  chatId: string
 ): Promise<MemoryRow[]> {
-  const supabase = createServiceClient()
-
-  const baseQuery = supabase
+  const { data, error } = await service
     .from('memories')
-    .select('type, value, granularity, confidence')
+    .select('type, value, scope, importance, confidence, source')
     .eq('user_id', userId)
-    .eq('needs_disambiguation', false)
-    .gte('confidence', 0.5)
+    .eq('chat_id', chatId)
+    .eq('scope', 'project')
+    .eq('status', 'active')
+    .order('importance', { ascending: false })
+    .limit(8)
 
-  if (priorityType) {
-    // Prioridade: até 7 do tipo específico + 5 gerais
-    const [priorityRes, generalRes] = await Promise.all([
-      baseQuery
-        .eq('type', priorityType)
-        .order('confidence', { ascending: false })
-        .order('granularity', { ascending: false }) // granularidade mais fina primeiro
-        .limit(7),
-      baseQuery
-        .neq('type', priorityType)
-        .order('confidence', { ascending: false })
-        .limit(5),
-    ])
-
-    if (priorityRes.error) console.warn('[CONTEXT] Erro prioridade:', priorityRes.error.message)
-    if (generalRes.error) console.warn('[CONTEXT] Erro geral:', generalRes.error.message)
-
-    return [...(priorityRes.data ?? []), ...(generalRes.data ?? [])]
-  }
-
-  // Sem prioridade: top 10 mais confiáveis
-  const { data, error } = await baseQuery
-    .order('confidence', { ascending: false })
-    .limit(10)
-
-  if (error) {
-    console.warn('[CONTEXT] Erro busca geral:', error.message)
-    return []
-  }
-
+  if (error) console.warn('[CONTEXT] Erro memórias projeto:', error.message)
   return data ?? []
 }
 
-// ─── Construção do bloco (mais natural e limpo) ─────────────────────────────
-function buildMemoryBlock(memories: MemoryRow[]): string {
-  if (memories.length === 0) return ''
+async function fetchGlobalMemories(
+  service: ReturnType<typeof createServiceClient>,
+  userId: string
+): Promise<MemoryRow[]> {
+  const { data, error } = await service
+    .from('memories')
+    .select('type, value, scope, importance, confidence, source')
+    .eq('user_id', userId)
+    .eq('scope', 'global')
+    .eq('status', 'active')
+    .eq('needs_disambiguation', false)
+    .gte('confidence', 0.5)
+    .order('importance', { ascending: false })
+    .order('confidence', { ascending: false })
+    .limit(8)
 
-  // Deduplicação forte + ordenação final
-  const seen = new Set<string>()
-  const unique = memories
-    .filter(m => {
-      const key = `${m.type}:${m.value.toLowerCase().trim()}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .sort((a, b) => b.confidence - a.confidence) // mais confiável primeiro
-
-  const lines = unique.map(m => {
-    const label = TYPE_LABELS[m.type] ?? m.type
-    return `• ${label}: ${m.value}`
-  })
-
-  return `Memórias relevantes sobre o usuário:\n${lines.join('\n')}`
+  if (error) console.warn('[CONTEXT] Erro memórias globais:', error.message)
+  return data ?? []
 }
 
-// ─── Função principal (mais limpa e resiliente) ─────────────────────────────
+async function fetchActiveTasks(
+  service: ReturnType<typeof createServiceClient>,
+  userId: string,
+  chatId: string
+): Promise<TaskRow[]> {
+  const { data, error } = await service
+    .from('tasks')
+    .select('title, description, status, importance')
+    .eq('user_id', userId)
+    .in('status', ['open', 'in_progress', 'blocked'])
+    .order('importance', { ascending: false })
+    .limit(6)
+
+  if (error) console.warn('[CONTEXT] Erro tarefas:', error.message)
+  return data ?? []
+}
+
+// ─── Montagem do contexto estruturado ────────────────────────────────────────
+
+const TYPE_LABELS: Record<string, string> = {
+  identity:             'Identidade',
+  location:             'Localização',
+  goal:                 'Objetivo pessoal',
+  preference:           'Preferência',
+  context:              'Contexto',
+  project_goal:         'Objetivo do projeto',
+  project_decision:     'Decisão',
+  project_constraint:   'Restrição',
+  project_scope:        'Escopo',
+  project_state:        'Estado atual',
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  open:        'aberta',
+  in_progress: 'em andamento',
+  blocked:     'bloqueada',
+}
+
+function buildContextBlock(
+  projectMemories: MemoryRow[],
+  globalMemories: MemoryRow[],
+  tasks: TaskRow[]
+): string {
+  const sections: string[] = []
+
+  // Bloco 1: Projeto
+  if (projectMemories.length > 0) {
+    const lines = projectMemories.map(m => {
+      const label = TYPE_LABELS[m.type] ?? m.type
+      const inferred = m.source !== 'explicit' ? ' (inferido)' : ''
+      return `• ${label}: ${m.value}${inferred}`
+    })
+    sections.push(`[Projeto atual]\n${lines.join('\n')}`)
+  }
+
+  // Bloco 2: Tarefas abertas
+  if (tasks.length > 0) {
+    const lines = tasks.map(t => {
+      const st = STATUS_LABELS[t.status] ?? t.status
+      const desc = t.description ? ` — ${t.description}` : ''
+      return `• [${st}] ${t.title}${desc}`
+    })
+    sections.push(`[Tarefas em aberto]\n${lines.join('\n')}`)
+  }
+
+  // Bloco 3: Perfil global
+  if (globalMemories.length > 0) {
+    const lines = globalMemories.map(m => {
+      const label = TYPE_LABELS[m.type] ?? m.type
+      return `• ${label}: ${m.value}`
+    })
+    sections.push(`[Perfil do usuário]\n${lines.join('\n')}`)
+  }
+
+  if (sections.length === 0) return ''
+
+  return `Contexto do usuário (recuperado da memória):\n\n${sections.join('\n\n')}`
+}
+
+// ─── Função principal ─────────────────────────────────────────────────────────
+
 export async function buildUserContext(
   userId: string,
+  chatId: string,
   userMessage: string
 ): Promise<string> {
   if (!userId || !userMessage?.trim()) return ''
 
   try {
-    const priorityType = detectMemoryType(userMessage)
+    const service = createServiceClient()
 
-    console.log(`[CONTEXT] Mensagem: "${userMessage.slice(0, 80)}${userMessage.length > 80 ? '...' : ''}"`)
-    console.log(`[CONTEXT] Tipo priorizado: ${priorityType ?? 'geral'}`)
+    const [projectMemories, globalMemories, tasks] = await Promise.all([
+      fetchProjectMemories(service, userId, chatId),
+      fetchGlobalMemories(service, userId),
+      fetchActiveTasks(service, userId, chatId),
+    ])
 
-    const memories = await fetchMemories(userId, priorityType)
+    const total = projectMemories.length + globalMemories.length + tasks.length
+    console.log(`[CONTEXT] Recuperados: ${projectMemories.length} projeto, ${globalMemories.length} global, ${tasks.length} tarefas`)
 
-    console.log(`[CONTEXT] ${memories.length} memórias recuperadas (únicas: ${new Set(memories.map(m => m.type)).size} tipos)`)
+    if (total === 0) return ''
 
-    const contextBlock = buildMemoryBlock(memories)
-
-    if (contextBlock) {
-      console.log(`[CONTEXT] Bloco de contexto gerado com ${memories.length} itens`)
-    }
-
-    return contextBlock
+    return buildContextBlock(projectMemories, globalMemories, tasks)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[CONTEXT] Erro ao construir contexto:', msg)
-    return '' // Nunca quebra o fluxo do chat
+    return ''
   }
 }
