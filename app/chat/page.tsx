@@ -2,7 +2,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { createClient } from '@/lib/llm/supabase/client'
 
 interface Message {
   id: string
