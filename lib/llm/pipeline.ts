@@ -3,16 +3,16 @@
 // buscar contexto, montar o array de mensagens e chamar o LLM.
 // O route.ts passa a ser só camada HTTP; toda lógica de negócio fica aqui.
 
-import { askGroq } from './groq'
-import { buildUserContext } from './context'
+import { askGroq, GROQ_MODELS } from './groq'
+import { buildUserContext }     from './context'
 import { extractAndSaveMemories } from './memory'
-import type { Message } from './types'
+import type { Message }         from './types'
 
 interface RunPipelineInput {
-  userId:   string
-  chatId:   string
-  message:  string
-  history:  Message[]   // histórico já buscado pelo route.ts (sem a msg atual)
+  userId:  string
+  chatId:  string
+  message: string
+  history: Message[]   // histórico já buscado pelo route.ts (sem a msg atual)
 }
 
 interface RunPipelineOutput {
@@ -24,11 +24,11 @@ export async function runChatPipeline(
 ): Promise<RunPipelineOutput> {
   const { userId, chatId, message, history } = input
 
-  // 1. Buscar contexto de memória em paralelo com a montagem do histórico
+  // 1. Buscar contexto de memória
   const memoryContext = await buildUserContext(userId, chatId, message)
 
   // 2. Montar array de mensagens com deduplicação
-  const lastMsg = history[history.length - 1]
+  const lastMsg         = history[history.length - 1]
   const alreadyIncluded = lastMsg?.role === 'user' && lastMsg?.content === message
 
   const conversationMessages: Message[] = alreadyIncluded
@@ -41,12 +41,13 @@ export async function runChatPipeline(
     : conversationMessages
 
   console.log(
-    `[PIPELINE] Enviando ao Groq — mensagens: ${conversationMessages.length}, ` +
+    `[PIPELINE] Enviando ao Groq — modelo: ${GROQ_MODELS.FAST}, ` +
+    `mensagens: ${conversationMessages.length}, ` +
     `memórias injetadas: ${memoryContext ? 'sim' : 'não'}`
   )
 
-  // 4. Chamar o LLM
-  const reply = await askGroq(messagesForLLM)
+  // 4. Chamar o LLM de conversa (modelo rápido)
+  const reply = await askGroq(messagesForLLM, { model: GROQ_MODELS.FAST })
 
   // 5. Extração de memória em background — nunca bloqueia o retorno
   extractAndSaveMemories(userId, chatId, message, reply).catch(err =>
