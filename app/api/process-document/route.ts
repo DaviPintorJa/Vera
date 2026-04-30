@@ -20,19 +20,19 @@ export async function POST(req: NextRequest) {
       const VERA_BRAIN_URL = process.env.VERA_BRAIN_URL;
       
       if (!VERA_BRAIN_URL) {
-        console.error('[VERA_BRAIN] Erro: VERA_BRAIN_URL não definida no .env.local');
+        console.error('[VERA_BRAIN] Erro: VERA_BRAIN_URL não definida nas variáveis de ambiente.');
         return NextResponse.json({ success: false, error: 'Configuração de URL do VERA Brain ausente.' }, { status: 500 });
       }
 
       // A URL que o Python deve chamar de volta
-      const CALLBACK_URL = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/process-document`;
+      const CALLBACK_URL = `${process.env.NEXT_PUBLIC_APP_URL || 'https://' + process.env.VERCEL_URL}/api/process-document`;
 
       const backendFormData = new FormData();
       backendFormData.append('file', file);
       backendFormData.append('chat_id', chatId);
       backendFormData.append('callback_url', CALLBACK_URL);
 
-      console.log(`[VERA_BRAIN] Iniciando trigger via POST: ${VERA_BRAIN_URL}`);
+      console.log(`[VERA_BRAIN] Triggering HF: ${VERA_BRAIN_URL} | Callback: ${CALLBACK_URL}`);
 
       // Dispara o processamento no Vera Brain (FastAPI)
       // Agora aguardamos o fetch inicial para capturar erros de rede imediatos (como ECONNREFUSED)

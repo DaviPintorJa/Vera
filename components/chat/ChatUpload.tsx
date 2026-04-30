@@ -36,8 +36,9 @@ export default function ChatUpload() {
         alert(`Erro VERA: ${data.error}`);
       }
     } catch (error) {
-      console.error('Erro no upload:', error);
-      alert('Erro ao conectar com o servidor.');
+      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+      console.error('Erro detalhado no upload:', error);
+      alert(`Erro de conexão com a VERA: ${errorMessage}`);
     } finally {
       setUploading(false);
     }
