@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
 
     // --- CENÁRIO B: RECEBENDO CALLBACK DO VERA BRAIN (PYTHON) ---
     const payload = await req.json();
-    console.log('[CALLBACK_RECEIVED] Payload from Vera Brain:', payload);
+    console.log('[CALLBACK_RECEIVED] Payload from Vera Brain:', JSON.stringify(payload, null, 2)); // Loga o payload completo e formatado
     const { chat_id, ingestion_job_id, summary_data, metadata, success, error } = payload; // Recebe ingestion_job_id
 
     const supabase = createClient( // Re-cria o cliente Supabase para este cenário
