@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, Request
+import os
+from fastapi import FastAPI, UploadFile, File, Request, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
@@ -27,8 +28,20 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 @app.post("/summarize-file")
-async def summarize_file(file: UploadFile = File(...)) -> dict:
+async def summarize_file(
+    file: UploadFile = File(...),
+    x_api_key: str = Header(None)
+) -> dict:
     start_time = time.time()
+    
+    # Log para depuração (Mascarado por segurança)
+    logger.info(f"Recebendo requisição. Chave recebida: {x_api_key[:4] if x_api_key else 'AUSENTE'}...")
+
+    # Validação da chave (deve estar configurada em Settings > Secrets no seu Space)
+    expected_key = os.environ.get("SUMMARIZER_API_KEY")
+    if not expected_key or x_api_key != expected_key:
+        logger.warning("Falha na autenticação: Chave incorreta ou não configurada no Space.")
+        raise HTTPException(status_code=403, detail="Acesso negado: Chave de API inválida.")
     
     try:
         # 1. Captura de metadados
@@ -63,10 +76,10 @@ async def summarize_file(file: UploadFile = File(...)) -> dict:
                 content={"success": False, "error": "O arquivo não contém texto extraível."}
             )
 
-        # 3. Processamento pela biblioteca summarizer.py
-        # (A lógica de garantir float no relevance já deve estar no summarizer.py)
+        # 3. Processamento pela classe TextSummarizer
         logger.info(f"Iniciando sumarização do texto do arquivo {filename}...")
-        summary_data = summarizer_engine.process(text)
+        # Certifique-se de chamar apenas .process(text) 
+        summary_data = summarizer_engine.process(text.strip())
         
         end_time = time.time()
         
