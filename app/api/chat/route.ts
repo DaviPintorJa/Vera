@@ -56,11 +56,14 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Erro ao buscar histórico do chat.' }, { status: 500 })
     }
 
-    // Reverter para ordem cronológica e garantir que content não seja null
-    const history = (historyData ?? []).reverse().map(m => ({
-      role:    m.role as Message['role'],
-      content: m.content || '',
-    }))
+    // Reverter, filtrar nulos/vazios e garantir que role seja aceito pela Groq
+    const history = (historyData ?? [])
+      .reverse()
+      .filter(m => m.role && m.content && m.content.trim() !== '')
+      .map(m => ({
+        role:    m.role as Message['role'],
+        content: m.content,
+      }))
 
     // 4. Executar pipeline de LLM
     const { reply } = await runChatPipeline({

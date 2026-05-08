@@ -43,10 +43,14 @@ export async function runChatPipeline(
     : conversationMessages
 
   console.log(
-    `[PIPELINE] Enviando ao Groq — modelo: ${GROQ_MODELS.FAST}, ` +
+    `[PIPELINE] Modelo: "${GROQ_MODELS.FAST}", ` +
     `mensagens: ${conversationMessages.length}, ` +
     `memórias injetadas: ${memoryContext ? 'sim' : 'não'}`
   )
+
+  if (!GROQ_MODELS.FAST) {
+    throw new Error("GROQ_MODELS.FAST está indefinido. Verifique lib/llm/groq.ts")
+  }
 
   // 4. Chamar o LLM de conversa (modelo rápido)
   const reply = await askGroq(messagesForLLM, { model: GROQ_MODELS.FAST })
