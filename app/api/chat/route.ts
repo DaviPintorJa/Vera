@@ -23,8 +23,10 @@ export async function POST(req: Request) {
     if (!user) return Response.json({ error: 'Não autorizado' }, { status: 401 })
 
     const body = await req.json()
-    const { message, chatId } = body
-    if (!message || !chatId) {
+    // Sanitização: garantir que message seja string
+    const message = typeof body.message === 'string' ? body.message : String(body.message || '')
+    const { chatId } = body
+    if (!message.trim() || !chatId) {
       return Response.json({ error: 'message e chatId são obrigatórios' }, { status: 400 })
     }
 
@@ -46,7 +48,7 @@ export async function POST(req: Request) {
       .from('messages')
       .select('role, content')
       .eq('chat_id', chatId)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false }) // Buscar as MAIS RECENTES primeiro
       .limit(20)
 
     if (historyError) {
@@ -54,9 +56,10 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Erro ao buscar histórico do chat.' }, { status: 500 })
     }
 
-    const history = (historyData ?? []).map(m => ({
+    // Reverter para ordem cronológica e garantir que content não seja null
+    const history = (historyData ?? []).reverse().map(m => ({
       role:    m.role as Message['role'],
-      content: m.content,
+      content: m.content || '',
     }))
 
     // 4. Executar pipeline de LLM

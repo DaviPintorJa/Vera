@@ -36,8 +36,10 @@ export async function runChatPipeline(
     : [...history, { role: 'user', content: message }]
 
   // 3. Injetar bloco de memória como mensagem de sistema adicional
-  const messagesForLLM: Message[] = memoryContext
-    ? [{ role: 'system', content: memoryContext }, ...conversationMessages]
+  // Garantir que memoryContext seja uma string válida e não vazia
+  const validContext = typeof memoryContext === 'string' && memoryContext.trim().length > 0
+  const messagesForLLM: Message[] = validContext
+    ? [{ role: 'system', content: memoryContext as string }, ...conversationMessages]
     : conversationMessages
 
   console.log(

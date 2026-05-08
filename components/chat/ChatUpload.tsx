@@ -31,7 +31,7 @@ export default function ChatUpload() {
       
       if (response.ok && data.success) {
         // Feedback visual de que o "agente" recebeu o trabalho
-        console.log('Análise iniciada via Vera Brain.');
+        console.log(`Análise iniciada via Vera Brain para Job ID: ${data.ingestion_job_id}.`);
       } else {
         alert(`Erro VERA: ${data.error}`);
       }
