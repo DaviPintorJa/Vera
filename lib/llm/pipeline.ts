@@ -6,7 +6,7 @@
 import { askGroq, GROQ_MODELS } from './groq'
 import { buildUserContext }     from './context'
 import { extractAndSaveMemories } from './memory'
-import { createClient }         from '@supabase/supabase-js' // Assumindo disponibilidade do pacote
+import { createServiceClient }  from '@/lib/llm/supabase/server'
 import type { Message }         from './types'
 
 interface RunPipelineInput {
@@ -85,10 +85,7 @@ export async function runChatPipeline(
 
     // Gravação persistente da falha para auditoria
     try {
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
-      )
+      const supabase = createServiceClient()
       await supabase.from('ingestion_jobs').insert({
         chat_id: chatId,
         status: 'failed',

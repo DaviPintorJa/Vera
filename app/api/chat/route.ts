@@ -32,6 +32,9 @@ export async function POST(req: Request) {
 
     const service = createServiceClient()
 
+    // Log de segurança/debug (remova em produção)
+    console.log('[DEBUG] Rota Chat - Validando IDs:', { chatId, userId: user.id, requestedProfileId })
+
     const { data: chat, error: chatError } = await service
       .from('chats')
       .select('id, user_id, profile_id')
@@ -44,11 +47,13 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Chat não encontrado' }, { status: 404 })
     }
 
-    const profileId = typeof requestedProfileId === 'string' && requestedProfileId.trim()
+    // Proteção contra "null" ou "undefined" vindo do frontend como string
+    const profileId = typeof requestedProfileId === 'string' && requestedProfileId.trim() && requestedProfileId !== 'undefined'
       ? requestedProfileId
       : chat.profile_id
 
     if (!profileId || chat.profile_id !== profileId) {
+      console.warn('[ROUTE] Conflito de Perfil:', { bodyId: requestedProfileId, chatDbId: chat.profile_id })
       return Response.json({ error: 'Perfil inválido para este chat' }, { status: 400 })
     }
 
