@@ -8,13 +8,15 @@ import type { MemoryRow, TaskRow } from '../types'
 export async function fetchProjectMemories(
   service: ReturnType<typeof createServiceClient>,
   userId: string,
-  chatId: string
+  chatId: string,
+  profileId: string
 ): Promise<MemoryRow[]> {
   const { data, error } = await service
     .from('memories')
     .select('type, value, scope, importance, confidence, source')
     .eq('user_id', userId)
     .eq('chat_id', chatId)
+    .eq('profile_id', profileId)
     .eq('scope', 'project')
     .eq('status', 'active')
     .order('importance', { ascending: false })
@@ -26,12 +28,14 @@ export async function fetchProjectMemories(
 
 export async function fetchGlobalMemories(
   service: ReturnType<typeof createServiceClient>,
-  userId: string
+  userId: string,
+  profileId: string
 ): Promise<MemoryRow[]> {
   const { data, error } = await service
     .from('memories')
     .select('type, value, scope, importance, confidence, source')
     .eq('user_id', userId)
+    .eq('profile_id', profileId)
     .eq('scope', 'global')
     .eq('status', 'active')
     .eq('needs_disambiguation', false)
@@ -49,15 +53,8 @@ export async function fetchActiveTasks(
   userId: string,
   chatId: string
 ): Promise<TaskRow[]> {
-  const { data, error } = await service
-    .from('tasks')
-    .select('title, description, status, importance')
-    .eq('user_id', userId)
-    .eq('chat_id', chatId)
-    .in('status', ['open', 'in_progress', 'blocked'])
-    .order('importance', { ascending: false })
-    .limit(6)
-
-  if (error) console.warn('[FETCHERS] Erro tarefas:', error.message)
-  return data ?? []
+  void service
+  void userId
+  void chatId
+  return []
 }

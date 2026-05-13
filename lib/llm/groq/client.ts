@@ -54,31 +54,53 @@ export async function callGroq(
   if (temperature !== undefined) body.temperature = temperature
   if (maxTokens    !== undefined) body.max_tokens  = maxTokens
 
-  console.log(`[GROQ] Chamando modelo "${model}" com ${messages.length} mensagem(ns).`)
+  const maxRetries = 2
+  let lastError: unknown
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  })
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[GROQ] Chamando modelo "${model}" (tentativa ${attempt + 1}/${maxRetries + 1})`)
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error(`[GROQ] API retornou erro ${response.status}:`, errorText)
-    throw new Error(`Groq API error: ${response.status} — ${errorText}`)
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        // Retentamos apenas se for erro de servidor (5xx) ou Rate Limit (429)
+        if (response.status === 429 || response.status >= 500) {
+          throw new Error(`Groq API status ${response.status}: ${errorText}`)
+        }
+        // Erros de cliente (400, 401) falham imediatamente
+        console.error(`[GROQ] Erro fatal ${response.status}:`, errorText)
+        throw new Error(`Groq API Fatal error: ${response.status}`)
+      }
+
+      const data = await response.json()
+      const reply = data.choices?.[0]?.message?.content
+
+      if (!reply) {
+        throw new Error('Resposta da Groq API veio vazia ou malformada.')
+      }
+
+      console.log(`[GROQ] Resposta recebida (modelo: ${model}).`)
+      return reply
+
+    } catch (error: unknown) {
+      lastError = error
+      if (attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 1000 // 1s, 2s, 4s...
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[GROQ] Falha na tentativa ${attempt + 1}. Retentando em ${delay}ms...`, message)
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
   }
 
-  const data = await response.json()
-  const reply = data.choices?.[0]?.message?.content
-
-  if (!reply) {
-    console.error('[GROQ] Resposta sem conteúdo:', JSON.stringify(data))
-    throw new Error('Resposta da Groq API veio vazia ou malformada.')
-  }
-
-  console.log(`[GROQ] Resposta recebida (modelo: ${model}).`)
-  return reply
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }

@@ -9,6 +9,7 @@ import { buildContextBlock } from './builder'
 export async function buildUserContext(
   userId: string,
   chatId: string,
+  profileId: string,
   userMessage: string
 ): Promise<string> {
   if (!userId || !userMessage?.trim()) return ''
@@ -17,8 +18,8 @@ export async function buildUserContext(
     const service = createServiceClient()
 
     const [projectMemories, globalMemories, tasks] = await Promise.all([
-      fetchProjectMemories(service, userId, chatId),
-      fetchGlobalMemories(service, userId),
+      fetchProjectMemories(service, userId, chatId, profileId),
+      fetchGlobalMemories(service, userId, profileId),
       fetchActiveTasks(service, userId, chatId),
     ])
 

@@ -5,7 +5,7 @@ import { useChat } from '@/app/chat/page'; // Importa o hook useChat do ChatCont
 
 export default function ChatUpload() {
   const [uploading, setUploading] = useState(false);
-  const { chatId } = useChat(); // Obtém o chatId do contexto
+  const { chatId, profileId } = useChat(); // Obtém o chatId e profileId do contexto
 
   const handleFileAction = async (file: File) => {
     if (uploading) return;
@@ -19,6 +19,7 @@ export default function ChatUpload() {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('chatId', chatId); // Envia o chatId para a rota Next.js
+    if (profileId) formData.append('profileId', profileId);
 
     // Envia o arquivo para a rota Next.js, que por sua vez envia para o Hugging Face
     try {

@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback, createContext, useContext } from 'react'
 import { createClient } from '@/lib/llm/supabase/client'
 
-import Sidebar,      { type Chat }    from '@/components/chat/Sidebar'
+import Sidebar,      { type Chat, type Profile } from '@/components/chat/Sidebar'
 import ChatHeader                     from '@/components/chat/ChatHeader'
 import ChatWindow,   { type Message } from '@/components/chat/ChatWindow'
 import MessageInput                   from '@/components/chat/MessageInput'
@@ -12,14 +12,19 @@ import TasksPanel                     from '@/components/chat/TasksPanel'
 import ChatUpload                     from '@/components/chat/ChatUpload'
 import type { Task }                  from '@/components/chat/TaskItem'
 
-// Contexto para compartilhar o chatId com componentes filhos
-const ChatContext = createContext<{ chatId: string | null }>({ chatId: null });
+// Contexto para compartilhar o chatId e o profileId com componentes filhos
+const ChatContext = createContext<{ chatId: string | null; profileId: string | null }>({
+  chatId: null,
+  profileId: null,
+});
 export const useChat = () => useContext(ChatContext);
 export default function ChatPage() {
   const [messages,    setMessages]    = useState<Message[]>([])
   const [input,       setInput]       = useState('')
   const [loading,     setLoading]     = useState(false)
   const [chatId,      setChatId]      = useState<string | null>(null)
+  const [profileId,   setProfileId]   = useState<string | null>(null)
+  const [profiles,    setProfiles]    = useState<Profile[]>([])
   const [chats,       setChats]       = useState<Chat[]>([])
   const [tasks,       setTasks]       = useState<Task[]>([])
   const [userId,      setUserId]      = useState<string | null>(null)
@@ -31,27 +36,22 @@ export default function ChatPage() {
 
   // ── Data fetchers ──────────────────────────────────────────────────────────
 
-  const loadChats = useCallback(async (uid: string) => {
+  const loadChats = useCallback(async (uid: string, pid: string) => {
     const { data } = await supabase
       .from('chats')
-      .select('id, title, created_at')
+      .select('id, title, created_at, profile_id')
       .eq('user_id', uid)
+      .eq('profile_id', pid)
       .order('created_at', { ascending: false })
       .limit(30)
     if (data) setChats(data as Chat[])
   }, [supabase])
 
   const loadTasks = useCallback(async (uid: string, cid: string) => {
-    const { data } = await supabase
-      .from('tasks')
-      .select('id, title, description, status, importance')
-      .eq('user_id', uid)
-      .eq('chat_id', cid)
-      .not('status', 'in', '("done","cancelled")')
-      .order('importance', { ascending: false })
-      .limit(10)
-    if (data) setTasks(data as Task[])
-  }, [supabase])
+    void uid
+    void cid
+    setTasks([])
+  }, [])
 
   const loadMessages = useCallback(async (cid: string) => {
     const { data } = await supabase
@@ -70,10 +70,29 @@ export default function ChatPage() {
       if (!user) { window.location.href = '/auth/login'; return }
       setUserId(user.id)
 
+      const { data: profileRows } = await supabase
+        .from('profiles')
+        .select('id, name, slug, description, system_prompt, is_default')
+        .eq('user_id', user.id)
+        .order('is_default', { ascending: false })
+        .order('created_at', { ascending: true })
+
+      const loadedProfiles = (profileRows ?? []) as Profile[]
+      setProfiles(loadedProfiles)
+
+      const currentProfile = loadedProfiles.find(profile => profile.is_default) ?? loadedProfiles[0]
+      if (!currentProfile) {
+        console.error('Nenhum perfil encontrado para este usuário')
+        return
+      }
+
+      setProfileId(currentProfile.id)
+
       const { data: existingChats } = await supabase
         .from('chats')
-        .select('id, title, created_at')
+        .select('id, title, created_at, profile_id')
         .eq('user_id', user.id)
+        .eq('profile_id', currentProfile.id)
         .order('created_at', { ascending: false })
         .limit(30)
 
@@ -85,7 +104,7 @@ export default function ChatPage() {
       } else {
         const { data: newChat } = await supabase
           .from('chats')
-          .insert({ user_id: user.id, title: 'Nova conversa' })
+          .insert({ user_id: user.id, profile_id: currentProfile.id, title: 'Nova conversa' })
           .select()
           .single()
         if (!newChat) { console.error('Erro ao criar chat'); return }
@@ -105,17 +124,52 @@ export default function ChatPage() {
   // ── Ações ──────────────────────────────────────────────────────────────────
 
   async function createNewChat() {
-    if (!userId) return
+    if (!userId || !profileId) return
     const { data: newChat } = await supabase
       .from('chats')
-      .insert({ user_id: userId, title: 'Nova conversa' })
+      .insert({ user_id: userId, profile_id: profileId, title: 'Nova conversa' })
       .select()
       .single()
     if (!newChat) return
     setChatId(newChat.id)
     setMessages([])
     setTasks([])
-    await loadChats(userId)
+    await loadChats(userId, profileId)
+  }
+
+  async function selectProfile(pid: string) {
+    if (!userId || !pid || pid === profileId) return
+    setProfileId(pid)
+    setMessages([])
+    setTasks([])
+    setChats([])
+
+    const { data: profileChats } = await supabase
+      .from('chats')
+      .select('id, title, created_at, profile_id')
+      .eq('user_id', userId)
+      .eq('profile_id', pid)
+      .order('created_at', { ascending: false })
+      .limit(30)
+
+    let nextChatId: string
+    if (profileChats && profileChats.length > 0) {
+      setChats(profileChats as Chat[])
+      nextChatId = profileChats[0].id
+    } else {
+      const { data: newChat } = await supabase
+        .from('chats')
+        .insert({ user_id: userId, profile_id: pid, title: 'Nova conversa' })
+        .select()
+        .single()
+      if (!newChat) return
+      setChats([newChat as Chat])
+      nextChatId = newChat.id
+    }
+
+    setChatId(nextChatId)
+    await loadMessages(nextChatId)
+    await loadTasks(userId, nextChatId)
   }
 
   async function switchChat(cid: string) {
@@ -139,7 +193,7 @@ export default function ChatPage() {
       const res  = await fetch('/api/chat', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ message: userText, chatId }),
+        body:    JSON.stringify({ message: userText, chatId, profileId }),
       })
       const data = await res.json()
 
@@ -150,7 +204,7 @@ export default function ChatPage() {
         ])
         if (userId) {
           setTimeout(() => loadTasks(userId, chatId), 2000)
-          loadChats(userId)
+          if (profileId) loadChats(userId, profileId)
         }
       } else {
         setMessages(prev => [
@@ -245,13 +299,16 @@ export default function ChatPage() {
         .new-chat-btn:hover { background: rgba(99,102,241,0.18) !important; }
         .footer-blur { background: rgba(7, 7, 13, 0.8); backdrop-filter: blur(12px); }
       `}</style>
-      <ChatContext.Provider value={{ chatId }}>
+      <ChatContext.Provider value={{ chatId, profileId }}>
       {sidebarOpen && (
         <Sidebar
           chats={chats}
+          profiles={profiles}
           activeChatId={chatId}
+          activeProfileId={profileId}
           onNewChat={createNewChat}
           onSelectChat={switchChat}
+          onSelectProfile={selectProfile}
         />
       )}
 

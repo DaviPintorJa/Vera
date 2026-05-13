@@ -25,16 +25,50 @@ export async function POST(req: Request) {
     const body = await req.json()
     // Sanitização: garantir que message seja string
     const message = typeof body.message === 'string' ? body.message : String(body.message || '')
-    const { chatId } = body
+    const { chatId, profileId: requestedProfileId } = body
     if (!message.trim() || !chatId) {
       return Response.json({ error: 'message e chatId são obrigatórios' }, { status: 400 })
     }
 
     const service = createServiceClient()
 
+    const { data: chat, error: chatError } = await service
+      .from('chats')
+      .select('id, user_id, profile_id')
+      .eq('id', chatId)
+      .eq('user_id', user.id)
+      .single()
+
+    if (chatError || !chat) {
+      console.error('[ROUTE] Chat não encontrado ou não pertence ao usuário:', chatError?.message)
+      return Response.json({ error: 'Chat não encontrado' }, { status: 404 })
+    }
+
+    const profileId = typeof requestedProfileId === 'string' && requestedProfileId.trim()
+      ? requestedProfileId
+      : chat.profile_id
+
+    if (!profileId || chat.profile_id !== profileId) {
+      return Response.json({ error: 'Perfil inválido para este chat' }, { status: 400 })
+    }
+
+    const { data: profile, error: profileError } = await service
+      .from('profiles')
+      .select('id, system_prompt')
+      .eq('id', profileId)
+      .eq('user_id', user.id)
+      .single()
+
+    if (profileError || !profile) {
+      console.error('[ROUTE] Perfil não encontrado:', profileError?.message)
+      return Response.json({ error: 'Perfil não encontrado' }, { status: 404 })
+    }
+
     // 2. Salvar mensagem do usuário
     const { error: insertUserError } = await service.from('messages').insert({
       chat_id: chatId,
+      user_id: user.id,
+      profile_id: profileId,
       role:    'user',
       content: message,
     })
@@ -69,6 +103,8 @@ export async function POST(req: Request) {
     const { reply } = await runChatPipeline({
       userId: user.id,
       chatId,
+      profileId,
+      profileSystemPrompt: profile.system_prompt,
       message,
       history,
     })
@@ -78,6 +114,8 @@ export async function POST(req: Request) {
     // 5. Salvar resposta da IA
     const { error: insertAssistantError } = await service.from('messages').insert({
       chat_id: chatId,
+      user_id: user.id,
+      profile_id: profileId,
       role:    'assistant',
       content: reply,
     })

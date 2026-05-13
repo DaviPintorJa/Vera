@@ -8,7 +8,6 @@ import { callGroq, GROQ_MODELS }      from '@/lib/llm/groq/client'
 import { createServiceClient }         from '@/lib/llm/supabase/server'
 import type { ExtractionResult as PipelineExtractionResult } from '../types'
 import { buildExtractionPrompt }       from './prompt'
-import { isValidTask }                 from './validator'
 
 // ─── System prompt minimalista para extração ──────────────────────────────────
 
@@ -453,37 +452,40 @@ const CANDIDATE_IMPORTANCE: Record<CandidateType, number> = {
   profession: 6, context: 6, relationship: 5, preference: 5, location: 4,
 }
 
-async function alreadyExists(service: ReturnType<typeof createServiceClient>, userId: string, type: string, value: string): Promise<boolean> {
-  const { data, error } = await service.from('memories').select('id').eq('user_id', userId).eq('type', type).eq('status', 'active').ilike('value', value.trim()).limit(1)
+async function alreadyExists(service: ReturnType<typeof createServiceClient>, userId: string, profileId: string, type: string, value: string): Promise<boolean> {
+  const { data, error } = await service.from('memories').select('id').eq('user_id', userId).eq('profile_id', profileId).eq('type', type).eq('status', 'active').ilike('value', value.trim()).limit(1)
   if (error) { console.warn('[EXTRACTOR] Erro dedup:', error.message); return false }
   return (data?.length ?? 0) > 0
 }
 
-async function supersedeMemory(service: ReturnType<typeof createServiceClient>, userId: string, type: string, oldValue: string): Promise<void> {
-  const { error } = await service.from('memories').update({ status: 'superseded', valid_to: new Date().toISOString() }).eq('user_id', userId).eq('type', type).eq('status', 'active').ilike('value', oldValue.trim())
+async function supersedeMemory(service: ReturnType<typeof createServiceClient>, userId: string, profileId: string, type: string, oldValue: string): Promise<void> {
+  const { error } = await service.from('memories').update({ status: 'superseded', valid_to: new Date().toISOString() }).eq('user_id', userId).eq('profile_id', profileId).eq('type', type).eq('status', 'active').ilike('value', oldValue.trim())
   if (error) console.warn('[EXTRACTOR] Erro supersede:', error.message)
   else console.log(`[EXTRACTOR] Supersedida: [${type}] "${oldValue}"`)
 }
 
 async function persistCandidates(
   service: ReturnType<typeof createServiceClient>,
-  userId: string, chatId: string, candidates: MemoryCandidate[]
+  userId: string, chatId: string, profileId: string, candidates: MemoryCandidate[]
 ): Promise<{ saved: number; skipped: number }> {
   let saved = 0, skipped = 0
 
   for (const c of candidates) {
-    if (c.supersedes) await supersedeMemory(service, userId, c.type, c.supersedes)
+    if (c.supersedes) await supersedeMemory(service, userId, profileId, c.type, c.supersedes)
 
-    const dup = await alreadyExists(service, userId, c.type, c.value)
+    const dup = await alreadyExists(service, userId, profileId, c.type, c.value)
     if (dup) { skipped++; continue }
 
     const scope = CANDIDATE_SCOPE[c.type] ?? 'global'
+    const subject = scope === 'project' ? `chat:${chatId}` : `profile:${profileId}`
     const { error } = await service.from('memories').insert({
       user_id: userId,
       chat_id: scope === 'project' ? chatId : null,
+      profile_id: profileId,
       type: c.type, value: c.value, granularity: c.granularity,
       confidence: c.confidence, needs_disambiguation: c.needs_disambiguation,
       content: c.value, scope,
+      subject,
       importance: CANDIDATE_IMPORTANCE[c.type] ?? 5,
       status: 'active',
       source: c.source === 'quick' ? 'explicit' : 'inference',
@@ -500,26 +502,11 @@ async function persistTasks(
   service: ReturnType<typeof createServiceClient>,
   userId: string, chatId: string, result: PipelineExtractionResult
 ): Promise<{ savedTasks: number }> {
-  let savedTasks = 0
-
-  for (const [i, item] of result.tasks.entries()) {
-    if (!isValidTask(item)) { console.warn(`[EXTRACTOR] Tarefa ${i} rejeitada`); continue }
-
-    const { data: existing } = await service.from('tasks').select('id, status').eq('user_id', userId).ilike('title', item.title.trim()).not('status', 'in', '("done","cancelled")').limit(1)
-
-    if (existing && existing.length > 0) {
-      if (existing[0].status !== item.status) {
-        await service.from('tasks').update({ status: item.status, updated_at: new Date().toISOString(), completed_at: item.status === 'done' ? new Date().toISOString() : null }).eq('id', existing[0].id)
-        console.log(`[EXTRACTOR] 🔄 Tarefa: "${item.title}" → ${item.status}`)
-      }
-      continue
-    }
-
-    const { error } = await service.from('tasks').insert({ user_id: userId, chat_id: chatId, title: item.title.trim(), description: item.description?.trim() ?? null, status: item.status, importance: item.importance })
-    if (error) console.error(`[EXTRACTOR] Erro tarefa "${item.title}":`, error.message)
-    else { console.log(`[EXTRACTOR] 📋 Tarefa: "${item.title}" (${item.status})`); savedTasks++ }
-  }
-  return { savedTasks }
+  void service
+  void userId
+  void chatId
+  void result
+  return { savedTasks: 0 }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -527,7 +514,7 @@ async function persistTasks(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export async function runExtractionPipeline(
-  userId: string, chatId: string, userMessage: string, assistantReply: string
+  userId: string, chatId: string, profileId: string, userMessage: string, assistantReply: string
 ): Promise<void> {
   if (!process.env.GROQ_API_KEY) { console.error('[EXTRACTOR] GROQ_API_KEY ausente.'); return }
 
@@ -546,7 +533,7 @@ export async function runExtractionPipeline(
     ])
 
     const service = createServiceClient()
-    const { saved, skipped } = await persistCandidates(service, userId, chatId, candidates)
+    const { saved, skipped } = await persistCandidates(service, userId, chatId, profileId, candidates)
     const { savedTasks }     = taskRaw ? await persistTasks(service, userId, chatId, taskRaw) : { savedTasks: 0 }
 
     console.log(`[EXTRACTOR] Resumo — memórias: +${saved}, duplicadas: ${skipped}, tarefas: +${savedTasks}`)

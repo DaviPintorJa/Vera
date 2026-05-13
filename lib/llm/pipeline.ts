@@ -3,7 +3,7 @@
 // buscar contexto, montar o array de mensagens e chamar o LLM.
 // O route.ts passa a ser só camada HTTP; toda lógica de negócio fica aqui.
 
-import { askGroq, GROQ_MODELS } from './groq'
+import { askGroq, GROQ_MODELS, VERA_SYSTEM_PROMPT } from './groq'
 import { buildUserContext }     from './context'
 import { extractAndSaveMemories } from './memory'
 import type { Message }         from './types'
@@ -11,6 +11,8 @@ import type { Message }         from './types'
 interface RunPipelineInput {
   userId:  string
   chatId:  string
+  profileId: string
+  profileSystemPrompt?: string | null
   message: string
   history: Message[]   // histórico já buscado pelo route.ts (sem a msg atual)
 }
@@ -22,10 +24,10 @@ interface RunPipelineOutput {
 export async function runChatPipeline(
   input: RunPipelineInput
 ): Promise<RunPipelineOutput> {
-  const { userId, chatId, message, history } = input
+  const { userId, chatId, profileId, profileSystemPrompt, message, history } = input
 
   // 1. Buscar contexto de memória
-  const memoryContext = await buildUserContext(userId, chatId, message)
+  const memoryContext = await buildUserContext(userId, chatId, profileId, message)
 
   // 2. Montar array de mensagens com deduplicação
   const lastMsg         = history[history.length - 1]
@@ -53,12 +55,21 @@ export async function runChatPipeline(
   }
 
   // 4. Chamar o LLM de conversa (modelo rápido)
-  const reply = await askGroq(messagesForLLM, { model: GROQ_MODELS.FAST })
+  const activeSystemPrompt = profileSystemPrompt?.trim()
+    ? `${VERA_SYSTEM_PROMPT}\n\n## Perfil ativo\n${profileSystemPrompt.trim()}`
+    : VERA_SYSTEM_PROMPT
+  const reply = await askGroq(messagesForLLM, {
+    model: GROQ_MODELS.FAST,
+    systemPrompt: activeSystemPrompt,
+  })
 
-  // 5. Extração de memória em background — nunca bloqueia o retorno
-  extractAndSaveMemories(userId, chatId, message, reply).catch(err =>
-    console.error('[PIPELINE] Erro na pipeline de memória:', err)
-  )
+  // 5. Extração de memória — Agora aguardamos a conclusão para garantir que
+  // as memórias estejam disponíveis na próxima interação, resolvendo a race condition.
+  try {
+    await extractAndSaveMemories(userId, chatId, profileId, message, reply)
+  } catch (err) {
+    console.error('[PIPELINE] Erro crítico na extração de memória:', err)
+  }
 
   return { reply }
 }

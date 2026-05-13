@@ -4,16 +4,39 @@ export interface Chat {
   id:         string
   title:      string
   created_at: string
+  profile_id?: string | null
+}
+
+export interface Profile {
+  id:            string
+  name:          string
+  slug:          string
+  description:   string | null
+  system_prompt: string | null
+  is_default:    boolean
 }
 
 interface Props {
   chats:         Chat[]
+  profiles:      Profile[]
   activeChatId:  string | null
+  activeProfileId: string | null
   onNewChat:     () => void
   onSelectChat:  (id: string) => void
+  onSelectProfile: (id: string) => void
 }
 
-export default function Sidebar({ chats, activeChatId, onNewChat, onSelectChat }: Props) {
+export default function Sidebar({
+  chats,
+  profiles,
+  activeChatId,
+  activeProfileId,
+  onNewChat,
+  onSelectChat,
+  onSelectProfile,
+}: Props) {
+  const activeProfile = profiles.find(profile => profile.id === activeProfileId)
+
   return (
     <div style={{
       width: 240,
@@ -46,6 +69,38 @@ export default function Sidebar({ chats, activeChatId, onNewChat, onSelectChat }
           fontSize: 13, fontWeight: 700,
           letterSpacing: '0.1em', color: '#e2e2f0',
         }}>VERA</span>
+      </div>
+
+      {/* Perfis */}
+      <div style={{ padding: '10px 10px 4px', borderBottom: '1px solid #111120' }}>
+        <div style={{
+          fontSize: 10, color: '#33334a', fontWeight: 500,
+          letterSpacing: '0.1em', textTransform: 'uppercase',
+          padding: '0 4px 6px',
+        }}>Perfil</div>
+        <select
+          value={activeProfileId ?? ''}
+          onChange={event => onSelectProfile(event.target.value)}
+          disabled={profiles.length === 0}
+          style={{
+            width: '100%',
+            padding: '8px 9px',
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid rgba(99,102,241,0.16)',
+            borderRadius: 8,
+            color: '#a5b4fc',
+            fontSize: 12,
+            fontFamily: "'DM Sans',system-ui",
+            outline: 'none',
+          }}
+          title={activeProfile?.description ?? 'Perfil ativo da VERA'}
+        >
+          {profiles.map(profile => (
+            <option key={profile.id} value={profile.id}>
+              {profile.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Novo Chat */}
